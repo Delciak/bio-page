@@ -1,5 +1,7 @@
 "use client"
 
+import type React from "react"
+
 import { useEffect, useState, useRef, useCallback } from "react"
 import Image from "next/image"
 import Link from "next/link"
@@ -7,202 +9,118 @@ import {
   Github,
   Instagram,
   Linkedin,
-  MessageSquare,
+  Music,
   Loader2,
   Twitter,
   Eye,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  VolumeX,
+  Volume1,
 } from "lucide-react"
-import Particles, { initParticlesEngine } from "@tsparticles/react"
-import { loadSlim } from "@tsparticles/slim"
-import { getDiscordActivity, incrementPageViews, getPageViews } from "@/app/actions"
 
-// Discord data types
-type DiscordActivity = {
-  name: string
-  type: number
-  state?: string
-  details?: string
-  application_id?: string
-  timestamps?: {
-    start?: number
-    end?: number
-  }
-  assets?: {
-    large_image?: string
-    large_text?: string
-    small_image?: string
-    small_text?: string
-  }
-  emoji?: {
-    name: string
-    id?: string
-    animated?: boolean
-  }
-  buttons?: string[]
-  created_at?: number
+// Music track type
+type MusicTrack = {
+  id: number
+  title: string
+  artist: string
+  album: string
+  duration: number
+  src: string
+  cover: string
 }
 
-type DiscordPresence = {
-  user: {
-    id: string
-    username: string
-    discriminator: string
-    avatar: string | null
-    nickname: string
-  }
-  status: string
-  activities: DiscordActivity[]
-  spotify?: {
-    album_art_url: string
-    album: string
-    artist: string
-    song: string
-    timestamps: {
-      start: number
-      end: number
-    }
-  }
-  discord_user: any
-  kv: Record<string, any>
-  active_on_discord_desktop: boolean
-  active_on_discord_mobile: boolean
-  active_on_discord_web: boolean
-  listening_to_spotify: boolean
-}
+// Simple in-memory view counter
+let globalViewCount = 0
 
 export default function BioPage() {
-  const [init, setInit] = useState(false)
-  const [discordPresence, setDiscordPresence] = useState<DiscordPresence | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [viewCount, setViewCount] = useState(0)
-  const [currentActivityIndex, setCurrentActivityIndex] = useState(0)
-  const [progressPercent, setProgressPercent] = useState<number>(0)
-  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [volume, setVolume] = useState(0.7)
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [mounted, setMounted] = useState(false)
+  const [hasInteracted, setHasInteracted] = useState(false)
 
   // Mouse position for parallax effect
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
   const cardRef = useRef<HTMLDivElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const volumeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const hasIncrementedView = useRef(false)
 
-  const DISCORD_USER_ID = "256470398961582080"
+  // Sample music tracks - replace with your actual MP3 files
+  const musicTracks: MusicTrack[] = [
+    {
+      id: 1,
+      title: "Chill Vibes",
+      artist: "Lo-Fi Artist",
+      album: "Relaxing Beats",
+      duration: 180,
+      src: "/music/track1.mp3",
+      cover: "/placeholder.svg?height=80&width=80&text=Track+1",
+    },
+    {
+      id: 2,
+      title: "Midnight Dreams",
+      artist: "Ambient Sounds",
+      album: "Night Sessions",
+      duration: 240,
+      src: "/music/track2.mp3",
+      cover: "/placeholder.svg?height=80&width=80&text=Track+2",
+    },
+    {
+      id: 3,
+      title: "Digital Waves",
+      artist: "Electronic Beats",
+      album: "Synthwave Collection",
+      duration: 200,
+      src: "/music/track3.mp3",
+      cover: "/placeholder.svg?height=80&width=80&text=Track+3",
+    },
+  ]
 
-  // Calculate and update progress percentage
-  const updateProgress = useCallback(() => {
-    if (!discordPresence?.activities && !discordPresence?.spotify) {
-      setProgressPercent(0)
-      return
-    }
+  const currentTrack = musicTracks[currentTrackIndex]
 
-    // Get all displayable activities (excluding custom status which is shown separately)
-    const displayableActivities = discordPresence?.activities?.filter((a) => a.type !== 4) || []
-
-    // Add Spotify as an activity if it exists and isn't already in activities
-    const allActivities =
-      discordPresence?.spotify && !displayableActivities.some((a) => a.name === "Spotify")
-        ? [
-            ...displayableActivities,
-            {
-              name: "Spotify",
-              type: 2,
-              details: discordPresence.spotify.song,
-              state: `by ${discordPresence.spotify.artist}`,
-              assets: {
-                large_image: discordPresence.spotify.album_art_url,
-                large_text: discordPresence.spotify.album,
-              },
-              timestamps: discordPresence.spotify.timestamps,
-            },
-          ]
-        : displayableActivities
-
-    if (!allActivities || allActivities.length === 0 || !allActivities[currentActivityIndex]) {
-      setProgressPercent(0)
-      return
-    }
-
-    const activity = allActivities[currentActivityIndex]
-    const now = Date.now()
-
-    // If activity has both start and end time (like Spotify)
-    if (activity.timestamps?.start && activity.timestamps?.end) {
-      const start = activity.timestamps.start
-      const end = activity.timestamps.end
-      const total = end - start
-      const elapsed = now - start
-
-      // Calculate percentage (clamped between 0-100)
-      const percent = Math.max(0, Math.min(100, (elapsed / total) * 100))
-      setProgressPercent(percent)
-    }
-    // If activity only has start time (like games, etc.)
-    else if (activity.timestamps?.start) {
-      const start = activity.timestamps.start
-      const elapsed = now - start
-
-      // For activities with only start time, we'll use a 2-hour maximum
-      // This is arbitrary but provides a reasonable scale
-      const maxDuration = 2 * 60 * 60 * 1000 // 2 hours in milliseconds
-
-      // Calculate percentage (capped at 100%)
-      const percent = Math.min(100, (elapsed / maxDuration) * 100)
-      setProgressPercent(percent)
-    } else {
-      // For activities without timestamps, use a pulsing effect
-      // This creates a progress bar that moves back and forth
-      const time = now / 1000
-      const pulse = (Math.sin(time) + 1) / 2 // Oscillates between 0 and 1
-      setProgressPercent(pulse * 30) // Scale to max 30% for subtle effect
-    }
-  }, [discordPresence, currentActivityIndex])
-
+  // Mark component as mounted
   useEffect(() => {
-    initParticlesEngine(async (engine) => {
-      await loadSlim(engine)
-    }).then(() => {
-      setInit(true)
-    })
+    setMounted(true)
+  }, [])
 
-    // Fetch Discord activity
-    const fetchDiscordActivity = async () => {
+  // Handle initial interaction
+  const handleInitialClick = useCallback(async () => {
+    if (!mounted || hasInteracted) return
+
+    setHasInteracted(true)
+
+    // Start playing music
+    if (audioRef.current) {
       try {
-        setLoading(true)
-        const data = await getDiscordActivity(DISCORD_USER_ID)
-        setDiscordPresence(data)
-        // Reset activity index when data changes
-        setCurrentActivityIndex(0)
-      } catch (err) {
-        console.error("Failed to fetch Discord activity:", err)
-        setError("Couldn't load Discord activity")
-      } finally {
-        setLoading(false)
+        await audioRef.current.play()
+        setIsPlaying(true)
+      } catch (error) {
+        console.error("Error playing audio:", error)
       }
     }
-
-    fetchDiscordActivity()
 
     // Increment page views
-    const trackPageView = async () => {
-      try {
-        const views = await incrementPageViews()
-        setViewCount(views)
-      } catch (err) {
-        console.error("Failed to track page view:", err)
-      }
+    if (!hasIncrementedView.current) {
+      globalViewCount++
+      setViewCount(globalViewCount)
+      hasIncrementedView.current = true
     }
+  }, [mounted, hasInteracted])
 
-    trackPageView()
-
-    // Refresh Discord activity every 60 seconds
-    const interval = setInterval(fetchDiscordActivity, 60000)
-
-    // Refresh view count every 30 seconds
-    const viewInterval = setInterval(async () => {
-      const views = await getPageViews()
-      setViewCount(views)
-    }, 30000)
+  // Initialize event listeners
+  useEffect(() => {
+    if (!mounted || !hasInteracted) return
 
     // Mouse move handler for parallax effect
     const handleMouseMove = (e: MouseEvent) => {
@@ -217,153 +135,186 @@ export default function BioPage() {
     window.addEventListener("mousemove", handleMouseMove)
 
     return () => {
-      clearInterval(interval)
-      clearInterval(viewInterval)
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current)
-      }
       window.removeEventListener("mousemove", handleMouseMove)
+      if (volumeTimeoutRef.current) {
+        clearTimeout(volumeTimeoutRef.current)
+      }
     }
+  }, [mounted, hasInteracted])
+
+  // Audio event handlers
+  useEffect(() => {
+    if (!mounted) return
+
+    const audio = audioRef.current
+    if (!audio) return
+
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration)
+      setIsLoading(false)
+    }
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime)
+    }
+
+    const handleEnded = () => {
+      setCurrentTrackIndex((prev) => (prev + 1) % musicTracks.length)
+      setCurrentTime(0)
+    }
+
+    const handleLoadStart = () => {
+      setIsLoading(true)
+    }
+
+    const handleCanPlay = () => {
+      setIsLoading(false)
+    }
+
+    const handleError = () => {
+      setIsLoading(false)
+      setIsPlaying(false)
+      console.error("Error loading audio track")
+    }
+
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata)
+    audio.addEventListener("timeupdate", handleTimeUpdate)
+    audio.addEventListener("ended", handleEnded)
+    audio.addEventListener("loadstart", handleLoadStart)
+    audio.addEventListener("canplay", handleCanPlay)
+    audio.addEventListener("error", handleError)
+
+    return () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata)
+      audio.removeEventListener("timeupdate", handleTimeUpdate)
+      audio.removeEventListener("ended", handleEnded)
+      audio.removeEventListener("loadstart", handleLoadStart)
+      audio.removeEventListener("canplay", handleCanPlay)
+      audio.removeEventListener("error", handleError)
+    }
+  }, [currentTrackIndex, mounted, musicTracks.length])
+
+  // Update audio volume
+  useEffect(() => {
+    if (!mounted || !audioRef.current) return
+    audioRef.current.volume = volume
+  }, [volume, mounted])
+
+  // Handle track changes
+  useEffect(() => {
+    if (!mounted || !audioRef.current || !hasInteracted) return
+
+    const audio = audioRef.current
+    setCurrentTime(0)
+
+    if (isPlaying) {
+      const playTimeout = setTimeout(() => {
+        audio.play().catch((error) => {
+          console.error("Error playing audio:", error)
+          setIsPlaying(false)
+        })
+      }, 100)
+
+      return () => clearTimeout(playTimeout)
+    }
+  }, [currentTrackIndex, mounted, hasInteracted, isPlaying])
+
+  // Play/pause functionality
+  const togglePlayPause = useCallback(async () => {
+    if (!audioRef.current || !mounted) return
+
+    try {
+      if (isPlaying) {
+        audioRef.current.pause()
+        setIsPlaying(false)
+      } else {
+        await audioRef.current.play()
+        setIsPlaying(true)
+      }
+    } catch (error) {
+      console.error("Error playing audio:", error)
+      setIsPlaying(false)
+    }
+  }, [isPlaying, mounted])
+
+  // Next track
+  const nextTrack = useCallback(() => {
+    if (!mounted) return
+    setCurrentTrackIndex((prev) => (prev + 1) % musicTracks.length)
+  }, [mounted, musicTracks.length])
+
+  // Previous track
+  const prevTrack = useCallback(() => {
+    if (!mounted) return
+    setCurrentTrackIndex((prev) => (prev - 1 + musicTracks.length) % musicTracks.length)
+  }, [mounted, musicTracks.length])
+
+  // Seek functionality
+  const handleSeek = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!audioRef.current || !duration || !mounted) return
+
+      const rect = e.currentTarget.getBoundingClientRect()
+      const clickX = e.clientX - rect.left
+      const percentage = clickX / rect.width
+      const newTime = percentage * duration
+
+      audioRef.current.currentTime = newTime
+      setCurrentTime(newTime)
+    },
+    [duration, mounted],
+  )
+
+  // Volume control
+  const handleVolumeChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!mounted) return
+      const newVolume = Number.parseFloat(e.target.value)
+      setVolume(newVolume)
+    },
+    [mounted],
+  )
+
+  const toggleMute = useCallback(() => {
+    if (!mounted) return
+    setVolume(volume === 0 ? 0.7 : 0)
+  }, [volume, mounted])
+
+  const showVolumeControl = useCallback(() => {
+    if (!mounted) return
+    setShowVolumeSlider(true)
+    if (volumeTimeoutRef.current) {
+      clearTimeout(volumeTimeoutRef.current)
+    }
+    volumeTimeoutRef.current = setTimeout(() => {
+      setShowVolumeSlider(false)
+    }, 3000)
+  }, [mounted])
+
+  // Format time
+  const formatTime = useCallback((time: number): string => {
+    if (isNaN(time)) return "0:00"
+    const minutes = Math.floor(time / 60)
+    const seconds = Math.floor(time % 60)
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`
   }, [])
 
-  // Update progress whenever the current activity changes
-  useEffect(() => {
-    // Clear any existing interval
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current)
-    }
-
-    // Initial update
-    updateProgress()
-
-    // Set up new interval
-    progressIntervalRef.current = setInterval(() => {
-      updateProgress()
-    }, 1000)
-
-    // Cleanup on unmount or when activity changes
-    return () => {
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current)
-      }
-    }
-  }, [updateProgress])
-
-  // Helper function to get asset URL
-  const getAssetUrl = (activity: any) => {
-    if (!activity.assets?.large_image) return null
-
-    if (activity.assets.large_image.startsWith("spotify:")) {
-      return activity.assets.large_image.replace("spotify:", "https://i.scdn.co/image/")
-    }
-
-    if (activity.assets.large_image.startsWith("mp:")) {
-      return `https://media.discordapp.net/${activity.assets.large_image.replace("mp:", "")}`
-    }
-
-    return `https://cdn.discordapp.com/app-assets/${activity.application_id}/${activity.assets.large_image}.png`
-  }
-
-  // Helper function to get small asset URL
-  const getSmallAssetUrl = (activity: any) => {
-    if (!activity.assets?.small_image) return null
-
-    if (activity.assets.small_image.startsWith("spotify:")) {
-      return activity.assets.small_image.replace("spotify:", "https://i.scdn.co/image/")
-    }
-
-    if (activity.assets.small_image.startsWith("mp:")) {
-      return `https://media.discordapp.net/${activity.assets.small_image.replace("mp:", "")}`
-    }
-
-    return `https://cdn.discordapp.com/app-assets/${activity.application_id}/${activity.assets.small_image}.png`
-  }
-
-  // Helper function to get activity type name
-  const getActivityTypeName = (type: number) => {
-    switch (type) {
-      case 0:
-        return "Playing"
-      case 1:
-        return "Streaming"
-      case 2:
-        return "Listening to"
-      case 3:
-        return "Watching"
-      case 4:
-        return "Custom Status"
-      case 5:
-        return "Competing in"
-      default:
-        return "Using"
-    }
-  }
-
-  // Format milliseconds to a human-readable time string
-  const formatTime = (ms: number): string => {
-    if (ms < 0) ms = 0
-
-    const seconds = Math.floor((ms / 1000) % 60)
-    const minutes = Math.floor((ms / (1000 * 60)) % 60)
-    const hours = Math.floor(ms / (1000 * 60 * 60))
-
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds}s`
-    } else {
-      return `${seconds}s`
-    }
-  }
-
-  // Get all displayable activities (excluding custom status which is shown separately)
-  const displayableActivities = discordPresence?.activities?.filter((a) => a.type !== 4) || []
-
-  // Add Spotify as an activity if it exists and isn't already in activities
-  const allActivities =
-    discordPresence?.spotify && !displayableActivities.some((a) => a.name === "Spotify")
-      ? [
-          ...displayableActivities,
-          {
-            name: "Spotify",
-            type: 2,
-            details: discordPresence.spotify.song,
-            state: `by ${discordPresence.spotify.artist}`,
-            assets: {
-              large_image: discordPresence.spotify.album_art_url,
-              large_text: discordPresence.spotify.album,
-            },
-            timestamps: discordPresence.spotify.timestamps,
-          },
-        ]
-      : displayableActivities
-
-  // Get current activity
-  const currentActivity = allActivities[currentActivityIndex]
-
-  // Navigation functions
-  const nextActivity = () => {
-    if (allActivities.length > 1) {
-      setCurrentActivityIndex((prev) => (prev + 1) % allActivities.length)
-    }
-  }
-
-  const prevActivity = () => {
-    if (allActivities.length > 1) {
-      setCurrentActivityIndex((prev) => (prev - 1 + allActivities.length) % allActivities.length)
-    }
-  }
+  // Get volume icon
+  const getVolumeIcon = useCallback(() => {
+    if (volume === 0) return VolumeX
+    if (volume < 0.5) return Volume1
+    return Volume2
+  }, [volume])
 
   // Calculate parallax transform based on mouse position
-  const parallaxTransform = () => {
-    if (!cardRef.current) return {}
+  const parallaxTransform = useCallback(() => {
+    if (!cardRef.current || !mounted) return {}
 
     const { x, y } = mousePosition
     const rect = cardRef.current.getBoundingClientRect()
     const maxX = rect.width / 2
     const maxY = rect.height / 2
 
-    // Limit the movement to a small range (5px in each direction)
     const moveX = (x / maxX) * 5
     const moveY = (y / maxY) * 5
 
@@ -371,73 +322,153 @@ export default function BioPage() {
       transform: `perspective(1000px) rotateX(${-moveY * 0.5}deg) rotateY(${moveX * 0.5}deg) translateX(${moveX}px) translateY(${moveY}px)`,
       transition: "transform 0.1s ease-out",
     }
+  }, [mousePosition, mounted])
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center py-10 px-4 relative overflow-hidden bg-black">
+        <div className="flex items-center justify-center">
+          <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
+        </div>
+      </div>
+    )
   }
 
+  const VolumeIcon = getVolumeIcon()
+
+  // Show initial click screen
+  if (!hasInteracted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
+        {/* Video Background */}
+        <div className="fixed inset-0 w-full h-full -z-10 bg-black">
+          <video
+            ref={videoRef}
+            className="w-full h-full object-cover"
+            autoPlay
+            loop
+            muted
+            playsInline
+            poster="/placeholder.svg?height=1080&width=1920&text=Loading+Video"
+          >
+            <source src="/background.mp4" type="video/mp4" />
+          </video>
+          {/* Dark overlay */}
+          <div className="absolute inset-0 bg-black/70" />
+        </div>
+
+        {/* Animated particles overlay */}
+        <div className="fixed inset-0 -z-5 pointer-events-none">
+          <div className="particles-container">
+            {[...Array(50)].map((_, i) => (
+              <div
+                key={i}
+                className="particle"
+                style={{
+                  left: `${Math.random() * 100}%`,
+                  top: `${Math.random() * 100}%`,
+                  animationDelay: `${Math.random() * 5}s`,
+                  animationDuration: `${15 + Math.random() * 10}s`,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Audio Element (preload) */}
+        <audio ref={audioRef} src={currentTrack.src} preload="auto" />
+
+        {/* Click Me Button */}
+        <button
+          onClick={handleInitialClick}
+          className="relative z-10 group cursor-pointer"
+          aria-label="Click to enter and play music"
+        >
+          <div className="text-center">
+            {/* Music Icon with Pulse Animation */}
+            <div className="mb-8 flex justify-center">
+              <div className="relative">
+                <div className="absolute inset-0 bg-purple-600 rounded-full blur-2xl opacity-50 group-hover:opacity-70 transition-opacity animate-pulse" />
+                <div className="relative w-32 h-32 rounded-full bg-gradient-to-br from-purple-600 to-purple-800 flex items-center justify-center border-4 border-purple-400/30 shadow-glow group-hover:scale-110 transition-transform duration-300">
+                  <Music className="w-16 h-16 text-white" />
+                </div>
+              </div>
+            </div>
+
+            {/* Click Me Text */}
+            <div className="space-y-4">
+              <h1 className="text-6xl font-bold text-white text-glow group-hover:scale-105 transition-transform duration-300">
+                Click Me
+              </h1>
+              <p className="text-xl text-gray-300 group-hover:text-white transition-colors duration-300">
+                Enter & Play Music
+              </p>
+            </div>
+
+            {/* Animated Arrow */}
+            <div className="mt-8 flex justify-center">
+              <div className="animate-bounce">
+                <svg
+                  className="w-8 h-8 text-purple-400"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </button>
+      </div>
+    )
+  }
+
+  // Show main profile after interaction
   return (
     <div className="min-h-screen flex items-center justify-center py-10 px-4 relative overflow-hidden">
-      {/* Particles.js container */}
-      {init && (
-        <Particles
-          id="tsparticles"
-          options={{
-            fpsLimit: 120,
-            fullScreen: {
-              enable: true,
-              zIndex: -1,
-            },
-            background: {
-              color: {
-                value: "#050505",
-              },
-            },
-            particles: {
-              color: {
-                value: "#ffffff",
-              },
-              links: {
-                color: "#ffffff",
-                distance: 150,
-                enable: true,
-                opacity: 0.3,
-                width: 1,
-              },
-              move: {
-                enable: true,
-                speed: 0.8,
-                direction: "none",
-                random: true,
-                straight: false,
-                outModes: {
-                  default: "out",
-                },
-              },
-              number: {
-                density: {
-                  enable: true,
-                  area: 800,
-                },
-                value: 120,
-              },
-              opacity: {
-                value: 0.5,
-              },
-              size: {
-                value: { min: 1, max: 3 },
-              },
-              shape: {
-                type: "circle",
-              },
-            },
-            detectRetina: true,
-          }}
-          className="absolute inset-0 -z-10"
-        />
-      )}
+      {/* Video Background */}
+      <div className="fixed inset-0 w-full h-full -z-10 bg-black">
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          autoPlay
+          loop
+          muted
+          playsInline
+          poster="/placeholder.svg?height=1080&width=1920&text=Loading+Video"
+        >
+          <source src="/background.mp4" type="video/mp4" />
+        </video>
+        {/* Dark overlay for better readability */}
+        <div className="absolute inset-0 bg-black/60" />
+      </div>
+
+      {/* Animated particles overlay */}
+      <div className="fixed inset-0 -z-5 pointer-events-none">
+        <div className="particles-container">
+          {[...Array(50)].map((_, i) => (
+            <div
+              key={i}
+              className="particle"
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: `${Math.random() * 100}%`,
+                animationDelay: `${Math.random() * 5}s`,
+                animationDuration: `${15 + Math.random() * 10}s`,
+              }}
+            />
+          ))}
+        </div>
+      </div>
 
       <div
         ref={cardRef}
         style={parallaxTransform()}
-        className="max-w-md w-full backdrop-blur-xl bg-black/40 rounded-2xl shadow-xl border border-purple-500/20 p-8 relative z-10"
+        className="max-w-md w-full backdrop-blur-xl bg-black/40 rounded-2xl shadow-xl border border-purple-500/20 p-8 relative z-10 animate-fade-in"
       >
         {/* View Counter */}
         <div className="absolute top-3 left-3 mt-1 flex items-center text-xs text-gray-300 bg-black/60 px-2 py-1 rounded-full shadow-glow-sm">
@@ -448,22 +479,14 @@ export default function BioPage() {
         {/* Profile Section */}
         <div className="mb-8 flex flex-col items-center">
           <div className="relative w-28 h-28 mb-4 rounded-full overflow-hidden border-2 border-purple-500 shadow-glow">
-            {discordPresence?.user?.avatar ? (
-              <Image
-                src={discordPresence.user.avatar || "/placeholder.svg"}
-                alt={discordPresence.user.username}
-                fill
-                className="object-cover"
-              />
-            ) : (
-              <div className="w-full h-full bg-gray-800 flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-              </div>
-            )}
+            <Image
+              src="/placeholder.svg?height=112&width=112&text=Profile"
+              alt="Profile"
+              fill
+              className="object-cover"
+            />
           </div>
-          <h1 className="text-2xl font-bold mb-1 text-white text-glow">
-            {discordPresence?.user?.nickname || "@username"}
-          </h1>
+          <h1 className="text-2xl font-bold mb-1 text-white text-glow">@username</h1>
           <p className="text-gray-200 text-center max-w-xs">
             Web developer, designer, and music enthusiast. Building cool things on the web.
           </p>
@@ -497,217 +520,143 @@ export default function BioPage() {
           </Link>
         </div>
 
-        {/* Discord Activity Section */}
+        {/* Music Player Section */}
         <div className="w-full">
           <h2 className="text-lg font-semibold mb-3 flex items-center text-white text-glow-sm">
-            <MessageSquare className="w-4 h-4 mr-2" />
-            Discord
+            <Music className="w-4 h-4 mr-2" />
+            Music Player
           </h2>
           <div className="bg-black/60 rounded-lg p-4 border border-purple-500/20 shadow-glow-sm">
-            {loading ? (
-              <div className="flex items-center justify-center py-2">
-                <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
-                <span className="ml-2 text-gray-300">Loading Discord status...</span>
+            {/* Audio Element */}
+            <audio ref={audioRef} src={currentTrack.src} preload="metadata" />
+
+            {/* Track Info */}
+            <div className="flex items-center mb-4">
+              <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0 mr-3">
+                <Image
+                  src={currentTrack.cover || "/placeholder.svg"}
+                  alt={currentTrack.title}
+                  fill
+                  className="object-cover"
+                />
+                {isLoading && (
+                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                    <Loader2 className="w-6 h-6 text-purple-400 animate-spin" />
+                  </div>
+                )}
               </div>
-            ) : error ? (
-              <div className="text-gray-300 text-sm py-2">{error}</div>
-            ) : (
-              <div>
-                {/* Discord Profile */}
-                <div className="flex items-center mb-4">
-                  <div className="relative w-14 h-14 rounded-full overflow-hidden border-2 border-white/20 mr-3">
-                    {discordPresence?.user?.avatar ? (
-                      <Image
-                        src={discordPresence.user.avatar || "/placeholder.svg"}
-                        alt={discordPresence.user.username}
-                        fill
-                        className="object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-gray-700 flex items-center justify-center">
-                        <MessageSquare className="w-6 h-6 text-gray-400" />
-                      </div>
-                    )}
-                    <div
-                      className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-gray-900 ${
-                        discordPresence?.status === "online"
-                          ? "bg-green-500"
-                          : discordPresence?.status === "idle"
-                            ? "bg-yellow-500"
-                            : discordPresence?.status === "dnd"
-                              ? "bg-red-500"
-                              : "bg-gray-500"
-                      }`}
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium text-white text-sm truncate">{currentTrack.title}</h3>
+                <p className="text-xs text-gray-300 truncate">{currentTrack.artist}</p>
+                <p className="text-xs text-gray-400 truncate">{currentTrack.album}</p>
+              </div>
+              {/* Volume Control */}
+              <div className="relative ml-2">
+                <button
+                  onClick={() => {
+                    toggleMute()
+                    showVolumeControl()
+                  }}
+                  onMouseEnter={showVolumeControl}
+                  className="w-8 h-8 rounded-full bg-black/40 flex items-center justify-center hover:bg-purple-900/50 transition-colors"
+                  aria-label="Volume control"
+                >
+                  <VolumeIcon className="w-4 h-4 text-white" />
+                </button>
+                {showVolumeSlider && (
+                  <div
+                    className="absolute bottom-full right-0 mb-2 bg-black/80 rounded-lg p-2 backdrop-blur-sm"
+                    onMouseEnter={() => {
+                      if (volumeTimeoutRef.current) {
+                        clearTimeout(volumeTimeoutRef.current)
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      volumeTimeoutRef.current = setTimeout(() => {
+                        setShowVolumeSlider(false)
+                      }, 1000)
+                    }}
+                  >
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={volume}
+                      onChange={handleVolumeChange}
+                      className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer slider"
+                      style={{
+                        background: `linear-gradient(to right, #a855f7 0%, #a855f7 ${volume * 100}%, #4b5563 ${
+                          volume * 100
+                        }%, #4b5563 100%)`,
+                      }}
                     />
                   </div>
-                  <div>
-                    <h3 className="font-medium text-white">{discordPresence?.user?.nickname}</h3>
-                    <p className="text-sm text-gray-300">
-                      {discordPresence?.user?.username}
-                      {discordPresence?.user?.discriminator !== "0" ? `#${discordPresence?.user?.discriminator}` : ""}
-                    </p>
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
-                      <p className="text-xs text-gray-400">
-                        {discordPresence?.status === "online"
-                          ? "Online"
-                          : discordPresence?.status === "idle"
-                            ? "Idle"
-                            : discordPresence?.status === "dnd"
-                              ? "Do Not Disturb"
-                              : "Offline"}
-                      </p>
-                      {discordPresence?.active_on_discord_mobile && <p className="text-xs text-gray-400">Mobile</p>}
-                      {discordPresence?.active_on_discord_web && <p className="text-xs text-gray-400">Web</p>}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Custom Status */}
-                {discordPresence?.activities?.find((a) => a.type === 4) && (
-                  <div className="mb-3 pb-3 border-b border-white/10">
-                    <div className="text-sm text-gray-300 flex items-center">
-                      <span className="text-xs text-purple-400 mr-2">Status:</span>
-                      {discordPresence.activities.find((a) => a.type === 4)?.emoji?.name && (
-                        <span className="mr-1">
-                          {discordPresence.activities.find((a) => a.type === 4)?.emoji?.name}
-                        </span>
-                      )}
-                      {discordPresence.activities.find((a) => a.type === 4)?.state || ""}
-                    </div>
-                  </div>
                 )}
+              </div>
+            </div>
 
-                {/* Discord Activity with Navigation */}
-                {allActivities.length > 0 ? (
-                  <div className="relative">
-                    {/* Activity Navigation */}
-                    {allActivities.length > 1 && (
-                      <div className="flex justify-between absolute -top-1 right-0 text-xs text-gray-400">
-                        <span>
-                          {currentActivityIndex + 1}/{allActivities.length}
-                        </span>
-                      </div>
-                    )}
+            {/* Progress Bar */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-1 text-xs text-gray-400">
+                <span>{formatTime(currentTime)}</span>
+                <span>{formatTime(duration)}</span>
+              </div>
+              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden cursor-pointer" onClick={handleSeek}>
+                <div
+                  className="h-full bg-gradient-to-r from-purple-600 to-purple-400 rounded-full shadow-glow-xs transition-all duration-100"
+                  style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                />
+              </div>
+            </div>
 
-                    <div className="flex-1">
-                      <div className="flex">
-                        <div className="w-20 flex-shrink-0">
-                          <div className="relative">
-                            {/* Increased size of album art */}
-                            <div className="w-20 h-20 relative rounded overflow-hidden bg-gray-800 flex items-center justify-center">
-                              {currentActivity?.assets?.large_image ? (
-                                <Image
-                                  src={getAssetUrl(currentActivity) || "/placeholder.svg"}
-                                  alt={currentActivity.assets.large_text || currentActivity.name}
-                                  fill
-                                  className="object-cover"
-                                />
-                              ) : (
-                                <MessageSquare className="w-6 h-6 text-gray-400" />
-                              )}
-                            </div>
+            {/* Controls */}
+            <div className="flex items-center justify-center gap-4">
+              <button
+                onClick={prevTrack}
+                className="w-10 h-10 rounded-full bg-black/40 flex items-center justify-center hover:bg-purple-900/50 transition-colors"
+                aria-label="Previous track"
+              >
+                <SkipBack className="w-5 h-5 text-white" />
+              </button>
 
-                            {/* Small image overlay - adjusted position for larger image */}
-                            {currentActivity?.assets?.small_image && (
-                              <div className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full overflow-hidden border-2 border-black bg-gray-800">
-                                <Image
-                                  src={getSmallAssetUrl(currentActivity) || "/placeholder.svg"}
-                                  alt={currentActivity.assets.small_text || ""}
-                                  fill
-                                  className="object-cover"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex-1 ml-3">
-                          <div className="flex items-center">
-                            <span className="text-xs text-purple-400 mr-2">
-                              {getActivityTypeName(currentActivity?.type)}
-                            </span>
-                            <h3 className="font-medium text-white text-sm">{currentActivity?.name}</h3>
-                          </div>
-
-                          {currentActivity?.details && (
-                            <p className="text-xs text-gray-300">{currentActivity.details}</p>
-                          )}
-
-                          {currentActivity?.state && <p className="text-xs text-gray-400">{currentActivity.state}</p>}
-
-                          {/* Buttons - only show if we have them */}
-                          {currentActivity?.buttons && currentActivity.buttons.length > 0 && (
-                            <div className="flex flex-wrap gap-2 mt-2">
-                              {currentActivity.buttons.map((button, idx) => (
-                                <span key={idx} className="text-xs bg-purple-900/50 text-white px-2 py-1 rounded-md">
-                                  {button}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* Progress Bar with Time Elapsed/Remaining - only show for Spotify */}
-                          {currentActivity?.timestamps && currentActivity?.name === "Spotify" && (
-                            <div className="mt-2">
-                              <div className="flex items-center justify-between mb-1 text-xs text-gray-400">
-                                {currentActivity.timestamps.start && (
-                                  <span className="flex items-center">
-                                    <Clock className="w-3 h-3 mr-1 text-purple-400" />
-                                    {formatTime(Date.now() - currentActivity.timestamps.start)}
-                                  </span>
-                                )}
-                                {currentActivity.timestamps.end && (
-                                  <span>{formatTime(currentActivity.timestamps.end - Date.now())}</span>
-                                )}
-                              </div>
-                              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-gradient-to-r from-purple-600 to-purple-400 rounded-full shadow-glow-xs"
-                                  style={{ width: `${progressPercent}%` }}
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Navigation Controls - aligned with the larger image */}
-                      {allActivities.length > 1 && (
-                        <div className="flex justify-between mt-3">
-                          <button
-                            onClick={prevActivity}
-                            className="w-8 h-8 rounded-full bg-black/40 flex items-center justify-center hover:bg-purple-900/50 transition-colors"
-                            aria-label="Previous activity"
-                          >
-                            <ChevronLeft className="w-4 h-4 text-white" />
-                          </button>
-
-                          {/* Activity Indicators */}
-                          <div className="flex items-center gap-1">
-                            {allActivities.map((_, idx) => (
-                              <div
-                                key={idx}
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  idx === currentActivityIndex ? "bg-purple-500" : "bg-gray-600"
-                                }`}
-                              />
-                            ))}
-                          </div>
-
-                          <button
-                            onClick={nextActivity}
-                            className="w-8 h-8 rounded-full bg-black/40 flex items-center justify-center hover:bg-purple-900/50 transition-colors"
-                            aria-label="Next activity"
-                          >
-                            <ChevronRight className="w-4 h-4 text-white" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+              <button
+                onClick={togglePlayPause}
+                disabled={isLoading}
+                className="w-12 h-12 rounded-full bg-purple-600 flex items-center justify-center hover:bg-purple-700 transition-colors disabled:opacity-50"
+                aria-label={isPlaying ? "Pause" : "Play"}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-6 h-6 text-white animate-spin" />
+                ) : isPlaying ? (
+                  <Pause className="w-6 h-6 text-white" />
                 ) : (
-                  <div className="text-gray-300 text-sm py-2">Not currently active</div>
+                  <Play className="w-6 h-6 text-white ml-1" />
                 )}
+              </button>
+
+              <button
+                onClick={nextTrack}
+                className="w-10 h-10 rounded-full bg-black/40 flex items-center justify-center hover:bg-purple-900/50 transition-colors"
+                aria-label="Next track"
+              >
+                <SkipForward className="w-5 h-5 text-white" />
+              </button>
+            </div>
+
+            {/* Track List Indicators */}
+            {musicTracks.length > 1 && (
+              <div className="flex items-center justify-center gap-1 mt-4">
+                {musicTracks.map((_, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setCurrentTrackIndex(idx)}
+                    className={`w-2 h-2 rounded-full transition-colors ${
+                      idx === currentTrackIndex ? "bg-purple-500" : "bg-gray-600 hover:bg-gray-500"
+                    }`}
+                    aria-label={`Play track ${idx + 1}`}
+                  />
+                ))}
               </div>
             )}
           </div>

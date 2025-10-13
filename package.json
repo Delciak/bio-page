@@ -10,9 +10,6 @@
   },
   "dependencies": {
     "@radix-ui/react-slot": "1.1.1",
-    "@tsparticles/engine": "latest",
-    "@tsparticles/react": "latest",
-    "@tsparticles/slim": "latest",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.454.0",
